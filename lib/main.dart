@@ -12,12 +12,12 @@ void main() async {
   try {
     await dotenv.load(fileName: ".env");
   } catch (e) {
-    print('⚠️ .env dosyası yüklenirken hata: $e');
+    print('⚠ .env dosyası yüklenirken hata: $e');
   }
 
   await Supabase.initialize(
-    url: dotenv.env['SUPABASE_URL'] ?? '',
-    anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
+    url: 'https://dzzedydeaqavpbqoofxi.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6emVkeWRlYXFnYXZwYm9vZnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTY2MjMwMjgsImV4cCI6MjAyMjE5OTAyOH0.00000000000000000000000000000000',
   );
 
   runApp(const MyApp());

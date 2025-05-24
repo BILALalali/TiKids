@@ -5,7 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 class YouTubeService {
   final SupabaseClient _supabase;
-  final String _apiKey = dotenv.env['YOUTUBE_API_KEY'] ?? '';
+  final String _apiKey = dotenv.env['AIzaSyCpK4jLiHWsNdbji9S1SlHPEdv2d3NfV1M'] ?? '';
 
   YouTubeService(this._supabase);
 
