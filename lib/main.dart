@@ -1,23 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'login.dart';
 import 'home.dart';
 import 'package:video_player/video_player.dart';
 
+// API Keys
+const String supabaseUrl = 'https://dzzedydeaqavpbqoofxi.supabase.co';
+const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6emVkeWRlYXFhdnBicW9vZnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc2ODc1MDcsImV4cCI6MjA2MzI2MzUwN30.KvlMy1YgIFsguRUj2_ZpMwfjHhGYEaUxjQPwDXmXrVM';
+const String youtubeApiKey = 'AIzaSyCpK4jLiHWsNdbji9S1SlHPEdv2d3NfV1M';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  try {
-    await dotenv.load(fileName: ".env");
-  } catch (e) {
-    print('⚠ .env dosyası yüklenirken hata: $e');
-  }
-
   await Supabase.initialize(
-    url: 'https://dzzedydeaqavpbqoofxi.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6emVkeWRlYXFnYXZwYm9vZnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTY2MjMwMjgsImV4cCI6MjAyMjE5OTAyOH0.00000000000000000000000000000000',
+    url: supabaseUrl,
+    anonKey: supabaseAnonKey,
   );
 
   runApp(const MyApp());
