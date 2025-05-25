@@ -7,16 +7,13 @@ import 'package:video_player/video_player.dart';
 
 // API Keys
 const String supabaseUrl = 'https://dzzedydeaqavpbqoofxi.supabase.co';
-const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6emVkeWRlYXFhdnBicW9vZnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc2ODc1MDcsImV4cCI6MjA2MzI2MzUwN30.KvlMy1YgIFsguRUj2_ZpMwfjHhGYEaUxjQPwDXmXrVM';
+const String supabaseAnonKey =
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6emVkeWRlYXFhdnBicW9vZnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc2ODc1MDcsImV4cCI6MjA2MzI2MzUwN30.KvlMy1YgIFsguRUj2_ZpMwfjHhGYEaUxjQPwDXmXrVM';
 const String youtubeApiKey = 'AIzaSyCpK4jLiHWsNdbji9S1SlHPEdv2d3NfV1M';
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Supabase.initialize(
-    url: supabaseUrl,
-    anonKey: supabaseAnonKey,
-  );
+  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
 
   runApp(const MyApp());
 }

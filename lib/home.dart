@@ -8,6 +8,7 @@ import 'main.dart' show SimpleVideoPlayerScreen;
 import 'screens/youtube_feed_screen.dart';
 import 'services/youtube_service.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'package:http/http.dart' as http;
 
 final GlobalKey<_HistoryScreenState> historyScreenKey =
     GlobalKey<_HistoryScreenState>();
@@ -118,10 +119,11 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
   List<Map<String, dynamic>> _localVideos = [];
   bool _isLoading = true;
   int _currentIndex = 0;
-  Map<int, VideoPlayerController?> _controllers = {};
   Map<int, YoutubePlayerController?> _ytControllers = {};
+  Map<int, VideoPlayerController?> _localControllers = {};
   bool _isLoadingMore = false;
   String? _nextPageToken;
+  Map<int, String?> _localVideoError = {};
 
   final Map<int, String> _categories = const {
     1: 'Eğitim',
@@ -160,48 +162,71 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     setState(() {});
   }
 
-  Future<void> _toggleLike(String videoId) async {
+  Future<void> _recordView(String videoId, {bool isYoutube = false}) async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
-    if (likedVideoIds.contains(videoId)) {
-      await Supabase.instance.client
-          .from('likes')
-          .delete()
-          .eq('user_id', user.id)
-          .eq('video_id', videoId);
-      likedVideoIds.remove(videoId);
-    } else {
-      if (dislikedVideoIds.contains(videoId)) {
-        await Supabase.instance.client
-            .from('dislikes')
-            .delete()
-            .eq('user_id', user.id)
-            .eq('video_id', videoId);
-        dislikedVideoIds.remove(videoId);
+
+    try {
+      String? title;
+      String? thumbnailUrl;
+
+      if (isYoutube) {
+        final video = _youtubeVideos.firstWhere(
+          (v) => v['video_id'].toString() == videoId,
+          orElse: () => {},
+        );
+        title = video['title'];
+        thumbnailUrl = video['thumbnail_url'];
+      } else {
+        final video = _localVideos.firstWhere(
+          (v) => v['id'].toString() == videoId,
+          orElse: () => {},
+        );
+        title = video['title'];
+        thumbnailUrl = video['thumbnail_url'];
       }
-      await Supabase.instance.client.from('likes').insert({
+
+      await Supabase.instance.client.from('video_history').upsert({
         'user_id': user.id,
         'video_id': videoId,
-        'user_name': user.email,
-        'created_at': DateTime.now().toIso8601String(),
+        'title': title,
+        'thumbnail_url': thumbnailUrl,
+        'is_youtube': isYoutube,
+        'watched_at': DateTime.now().toIso8601String(),
       });
-      likedVideoIds.add(videoId);
+
+      // Refresh history screen
+      if (historyScreenKey.currentState != null) {
+        historyScreenKey.currentState!._fetchHistory();
+      }
+    } catch (e) {
+      print('Error recording view: $e');
     }
-    setState(() {});
-    historyScreenKey.currentState?._fetchHistory();
   }
 
-  Future<void> _toggleDislike(String videoId) async {
+  Future<void> _toggleLike(String videoId, {bool isYoutube = false}) async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
-    if (dislikedVideoIds.contains(videoId)) {
-      await Supabase.instance.client
-          .from('dislikes')
-          .delete()
-          .eq('user_id', user.id)
-          .eq('video_id', videoId);
-      dislikedVideoIds.remove(videoId);
-    } else {
+    try {
+      String? title;
+      String? thumbnailUrl;
+
+      if (isYoutube) {
+        final video = _youtubeVideos.firstWhere(
+          (v) => v['video_id'].toString() == videoId,
+          orElse: () => {},
+        );
+        title = video['title'];
+        thumbnailUrl = video['thumbnail_url'];
+      } else {
+        final video = _localVideos.firstWhere(
+          (v) => v['id'].toString() == videoId,
+          orElse: () => {},
+        );
+        title = video['title'];
+        thumbnailUrl = video['video_url'];
+      }
+
       if (likedVideoIds.contains(videoId)) {
         await Supabase.instance.client
             .from('likes')
@@ -209,45 +234,106 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
             .eq('user_id', user.id)
             .eq('video_id', videoId);
         likedVideoIds.remove(videoId);
+      } else {
+        if (dislikedVideoIds.contains(videoId)) {
+          await Supabase.instance.client
+              .from('dislikes')
+              .delete()
+              .eq('user_id', user.id)
+              .eq('video_id', videoId);
+          dislikedVideoIds.remove(videoId);
+        }
+        await Supabase.instance.client.from('likes').insert({
+          'user_id': user.id,
+          'video_id': videoId,
+          'youtube_video_id': isYoutube ? videoId : null,
+          'user_name': user.email,
+          'created_at': DateTime.now().toIso8601String(),
+          'title': title,
+          'thumbnail_url': thumbnailUrl,
+        });
+        likedVideoIds.add(videoId);
       }
-      await Supabase.instance.client.from('dislikes').insert({
-        'user_id': user.id,
-        'video_id': videoId,
-        'user_name': user.email,
-        'created_at': DateTime.now().toIso8601String(),
-      });
-      dislikedVideoIds.add(videoId);
+      setState(() {});
+
+      // Refresh history screen
+      if (historyScreenKey.currentState != null) {
+        historyScreenKey.currentState!._fetchHistory();
+      }
+    } catch (e) {
+      debugPrint('Error toggling like: $e');
     }
-    await Future.delayed(const Duration(milliseconds: 100));
-    setState(() {});
-    historyScreenKey.currentState?._fetchHistory();
   }
 
-  Future<void> _recordView(String videoId, {bool isYoutube = false}) async {
+  Future<void> _toggleDislike(String videoId, {bool isYoutube = false}) async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
     try {
-      await Supabase.instance.client.from('video_history').insert({
-        'user_id': user.id,
-        'video_id': videoId,
-        'user_name': user.email,
-        'watched_at': DateTime.now().toIso8601String(),
-      });
-      historyScreenKey.currentState?._fetchHistory();
+      String? title;
+      String? thumbnailUrl;
+
+      if (isYoutube) {
+        final video = _youtubeVideos.firstWhere(
+          (v) => v['video_id'].toString() == videoId,
+          orElse: () => {},
+        );
+        title = video['title'];
+        thumbnailUrl = video['thumbnail_url'];
+      } else {
+        final video = _localVideos.firstWhere(
+          (v) => v['id'].toString() == videoId,
+          orElse: () => {},
+        );
+        title = video['title'];
+        thumbnailUrl = video['video_url'];
+      }
+
+      if (dislikedVideoIds.contains(videoId)) {
+        await Supabase.instance.client
+            .from('dislikes')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('video_id', videoId);
+        dislikedVideoIds.remove(videoId);
+      } else {
+        if (likedVideoIds.contains(videoId)) {
+          await Supabase.instance.client
+              .from('likes')
+              .delete()
+              .eq('user_id', user.id)
+              .eq('video_id', videoId);
+          likedVideoIds.remove(videoId);
+        }
+        await Supabase.instance.client.from('dislikes').insert({
+          'user_id': user.id,
+          'video_id': videoId,
+          'youtube_video_id': isYoutube ? videoId : null,
+          'user_name': user.email,
+          'created_at': DateTime.now().toIso8601String(),
+          'title': title,
+          'thumbnail_url': thumbnailUrl,
+        });
+        dislikedVideoIds.add(videoId);
+      }
+      setState(() {});
+
+      // Refresh history screen
+      if (historyScreenKey.currentState != null) {
+        historyScreenKey.currentState!._fetchHistory();
+      }
     } catch (e) {
-      // سطر فارغ
+      debugPrint('Error toggling dislike: $e');
     }
   }
 
   @override
   void initState() {
     super.initState();
-    // إذا تم تمرير قائمة فيديوهات يوتيوب مخصصة (من البحث)
     if (widget.youtubeVideos != null && widget.youtubeVideos!.isNotEmpty) {
       _youtubeVideos = widget.youtubeVideos!;
       _isLoading = false;
       _currentIndex = widget.initialIndex ?? 0;
-      _initializeVideo(_currentIndex); // تهيئة الفيديو مباشرة
+      _initializeVideo(_currentIndex);
     } else {
       _fetchAll();
     }
@@ -257,29 +343,74 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
 
   Future<void> _fetchAll() async {
     setState(() => _isLoading = true);
-    List<Map<String, dynamic>> yt = [];
-    if (_selectedCategory != 99) {
-      final result = await _youtubeService.searchVideos(
-        query: _categories[_selectedCategory] ?? 'Eğitim',
-        categoryId: _selectedCategory,
-      );
-      yt = result.videos;
-      _nextPageToken = result.nextPageToken;
+
+    try {
+      // Fetch YouTube videos
+      if (_selectedCategory != 99) {
+        final result = await _youtubeService.searchVideos(
+          query: _categories[_selectedCategory] ?? 'Eğitim',
+          categoryId: _selectedCategory,
+        );
+        _youtubeVideos = result.videos;
+        _nextPageToken = result.nextPageToken;
+      }
+
+      // Fetch local videos with proper error handling
+      try {
+        final localVideosResponse = await Supabase.instance.client
+            .from('videos')
+            .select()
+            .eq('is_approved', true)
+            .order('created_at', ascending: false);
+
+        if (mounted) {
+          setState(() {
+            _localVideos = List<Map<String, dynamic>>.from(localVideosResponse);
+
+            // Pre-process video URLs
+            for (var video in _localVideos) {
+              if (video['video_url'] != null &&
+                  !video['video_url'].toString().startsWith('http')) {
+                try {
+                  final fileName =
+                      video['video_url'].toString().split('/').last;
+                  video['video_url'] = Supabase.instance.client.storage
+                      .from('videos')
+                      .getPublicUrl(fileName);
+                } catch (e) {
+                  print('Error processing video URL: $e');
+                }
+              }
+            }
+
+            _isLoading = false;
+            _currentIndex = 0;
+          });
+
+          // Initialize videos based on current view
+          if (_youtubeVideos.isNotEmpty && _selectedCategory != 99) {
+            _initializeVideo(0);
+          } else if (_localVideos.isNotEmpty) {
+            _initializeLocalVideo(0);
+          }
+        }
+      } catch (e) {
+        print('Error fetching local videos: $e');
+        if (mounted) {
+          setState(() {
+            _localVideos = [];
+            _isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      print('Error in _fetchAll: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
-    final local = await Supabase.instance.client
-        .from('videos')
-        .select()
-        .eq('is_approved', true)
-        .order('created_at', ascending: false);
-    final filteredLocal = List<Map<String, dynamic>>.from(local);
-    if (!mounted) return;
-    setState(() {
-      _youtubeVideos = yt;
-      _localVideos = filteredLocal;
-      _isLoading = false;
-      _currentIndex = 0;
-    });
-    _preloadVideos();
   }
 
   Future<void> _loadMoreVideos() async {
@@ -314,68 +445,156 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
   Future<void> _initializeVideo(int index) async {
     if (_ytControllers.containsKey(index)) return;
 
-    final video = _youtubeVideos[index];
-    final controller = YoutubePlayerController(
-      initialVideoId: video['video_id'],
-      flags: const YoutubePlayerFlags(
-        autoPlay: false,
-        mute: false,
-        enableCaption: true,
-      ),
-    );
+    try {
+      final video = _youtubeVideos[index];
+      final controller = YoutubePlayerController(
+        initialVideoId: video['video_id'],
+        flags: const YoutubePlayerFlags(
+          autoPlay: true,
+          mute: false,
+          enableCaption: true,
+          showLiveFullscreenButton: false,
+        ),
+      );
 
-    _ytControllers[index] = controller;
+      setState(() {
+        _ytControllers[index] = controller;
+      });
 
-    if (index == _currentIndex) {
-      controller.play();
+      if (index == _currentIndex) {
+        controller.play();
+      }
+    } catch (e) {
+      print('Error initializing YouTube video: $e');
     }
+  }
 
-    setState(() {});
+  Future<void> _initializeLocalVideo(int index) async {
+    if (_localControllers.containsKey(index)) return;
+
+    try {
+      final video = _localVideos[index];
+      final videoUrl = video['video_url'];
+
+      if (videoUrl == null) {
+        throw Exception('Video URL is null');
+      }
+
+      // Get the public URL for the video from Supabase storage
+      String publicUrl;
+      if (videoUrl.startsWith('http')) {
+        publicUrl = videoUrl;
+      } else {
+        try {
+          // Extract the file name from the storage path
+          final fileName = videoUrl.split('/').last;
+          // Get a fresh public URL with the correct permissions
+          publicUrl = await Supabase.instance.client.storage
+              .from('videos')
+              .createSignedUrl(fileName, 3600); // URL valid for 1 hour
+        } catch (e) {
+          print('Error getting signed URL: $e');
+          setState(() {
+            _localVideoError[index] = 'Error getting video URL';
+          });
+          return;
+        }
+      }
+
+      print('Attempting to load video from URL: $publicUrl');
+
+      // Initialize with better error handling
+      final controller = VideoPlayerController.networkUrl(Uri.parse(publicUrl));
+      bool initialized = false;
+
+      try {
+        await Future.any([
+          controller.initialize().then((_) => initialized = true),
+          Future.delayed(const Duration(seconds: 15)),
+        ]);
+
+        if (!initialized) {
+          throw Exception('Video initialization timeout');
+        }
+
+        if (mounted) {
+          setState(() {
+            _localControllers[index] = controller;
+            _localVideoError[index] = null;
+          });
+
+          if (index == _currentIndex) {
+            controller.play();
+          }
+        }
+      } catch (e) {
+        controller.dispose();
+        print('Error initializing video: $e');
+        if (mounted) {
+          setState(() {
+            _localVideoError[index] = 'Failed to load video: $e';
+          });
+        }
+      }
+    } catch (e) {
+      print('Error in _initializeLocalVideo: $e');
+      if (mounted) {
+        setState(() {
+          _localVideoError[index] = e.toString();
+        });
+      }
+    }
+  }
+
+  void _disposeLocalControllers() {
+    for (var controller in _localControllers.values) {
+      controller?.dispose();
+    }
+    _localControllers.clear();
   }
 
   void _onSwipe(int direction) {
-    // إذا كانت قائمة فيديوهات يوتيوب مخصصة (بحث)
     final isCustomYoutube =
         widget.youtubeVideos != null && widget.youtubeVideos!.isNotEmpty;
+    final isLocalSection = _selectedCategory == 99 && !isCustomYoutube;
     final total =
         isCustomYoutube
             ? _youtubeVideos.length
-            : (_selectedCategory == 99
+            : (isLocalSection
                 ? _localVideos.length
                 : _youtubeVideos.length + _localVideos.length);
     int newIndex = _currentIndex + direction;
-
     if (newIndex < 0 || newIndex >= total) return;
 
-    // إيقاف الفيديو الحالي
-    _ytControllers[_currentIndex]?.pause();
-
-    setState(() {
-      _currentIndex = newIndex;
-    });
-
-    // تشغيل الفيديو الجديد
-    _ytControllers[_currentIndex]?.play();
-
-    // تحميل المزيد من الفيديوهات إذا كنا قريبين من النهاية (فقط في الوضع الافتراضي)
-    if (!isCustomYoutube && newIndex >= _youtubeVideos.length - 3) {
-      _loadMoreVideos();
-    }
-
-    // تحميل الفيديوهات الجديدة
-    _preloadVideos();
-
-    // تسجيل المشاهدة
+    // Record view for the current video before changing
     if (isCustomYoutube) {
       final video = _youtubeVideos[_currentIndex];
       _recordView(video['video_id'].toString(), isYoutube: true);
-    } else if (_selectedCategory == 99) {
+    } else if (isLocalSection) {
       final video = _localVideos[_currentIndex];
       _recordView(video['id'].toString(), isYoutube: false);
     } else if (_currentIndex < _youtubeVideos.length) {
       final video = _youtubeVideos[_currentIndex];
       _recordView(video['video_id'].toString(), isYoutube: true);
     }
+
+    if (isLocalSection) {
+      _localControllers[_currentIndex]?.pause();
+      setState(() {
+        _currentIndex = newIndex;
+      });
+      _initializeLocalVideo(_currentIndex);
+      return;
+    }
+    _ytControllers[_currentIndex]?.pause();
+    setState(() {
+      _currentIndex = newIndex;
+    });
+    _ytControllers[_currentIndex]?.play();
+    if (!isCustomYoutube && newIndex >= _youtubeVideos.length - 3) {
+      _loadMoreVideos();
+    }
+    _preloadVideos();
   }
 
   @override
@@ -409,7 +628,19 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     final isLiked = likedVideoIds.contains(videoId);
     final isDisliked = dislikedVideoIds.contains(videoId);
 
-    // إذا لم يكن YoutubePlayerController مهيأً، هيئه فورًا
+    if (isLocalSection && _localControllers[_currentIndex] == null) {
+      _initializeLocalVideo(_currentIndex);
+      if (_localVideoError[_currentIndex] != null) {
+        return Center(
+          child: Text(
+            'تعذر تحميل الفيديو المحلي:\n${_localVideoError[_currentIndex]}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.red),
+          ),
+        );
+      }
+      return const Center(child: Text('جاري تحميل الفيديو المحلي...'));
+    }
     if (isYoutube && _ytControllers[_currentIndex] == null) {
       _initializeVideo(_currentIndex);
       return const Center(child: Text('جاري تحميل الفيديو...'));
@@ -418,7 +649,6 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
     return SafeArea(
       child: Column(
         children: [
-          // Kategori seçici (لا تظهر في وضع البحث)
           if (!isCustomYoutube)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12.0),
@@ -457,56 +687,49 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
                 children: [
                   Center(
                     child:
-                        isYoutube
-                            ? (_ytControllers[_currentIndex] != null
+                        isLocalSection
+                            ? (_localControllers[_currentIndex] != null &&
+                                    _localControllers[_currentIndex]!
+                                        .value
+                                        .isInitialized
                                 ? AspectRatio(
-                                  aspectRatio: 9 / 16,
+                                  aspectRatio:
+                                      _localControllers[_currentIndex]!
+                                          .value
+                                          .aspectRatio,
                                   child: ClipRRect(
                                     borderRadius: BorderRadius.circular(24),
-                                    child: YoutubePlayer(
-                                      controller:
-                                          _ytControllers[_currentIndex]!,
-                                      showVideoProgressIndicator: true,
-                                      progressIndicatorColor: Colors.purple,
-                                      progressColors: const ProgressBarColors(
-                                        playedColor: Colors.purple,
-                                        handleColor: Colors.purpleAccent,
-                                      ),
-                                      onReady: () {
-                                        _ytControllers[_currentIndex]!.play();
-                                      },
+                                    child: VideoPlayer(
+                                      _localControllers[_currentIndex]!,
                                     ),
                                   ),
                                 )
                                 : const CircularProgressIndicator())
-                            : (_controllers[_currentIndex] != null &&
-                                    _controllers[_currentIndex]!
-                                        .value
-                                        .isInitialized
-                                ? AspectRatio(
-                                  aspectRatio: 9 / 16,
-                                  child: FittedBox(
-                                    fit: BoxFit.cover,
-                                    child: SizedBox(
-                                      width:
-                                          _controllers[_currentIndex]!
-                                              .value
-                                              .size
-                                              .width,
-                                      height:
-                                          _controllers[_currentIndex]!
-                                              .value
-                                              .size
-                                              .height,
+                            : (isYoutube
+                                ? (_ytControllers[_currentIndex] != null
+                                    ? AspectRatio(
+                                      aspectRatio: 9 / 16,
                                       child: ClipRRect(
                                         borderRadius: BorderRadius.circular(24),
-                                        child: VideoPlayer(
-                                          _controllers[_currentIndex]!,
+                                        child: YoutubePlayer(
+                                          controller:
+                                              _ytControllers[_currentIndex]!,
+                                          showVideoProgressIndicator: true,
+                                          progressIndicatorColor: Colors.purple,
+                                          progressColors:
+                                              const ProgressBarColors(
+                                                playedColor: Colors.purple,
+                                                handleColor:
+                                                    Colors.purpleAccent,
+                                              ),
+                                          onReady: () {
+                                            _ytControllers[_currentIndex]!
+                                                .play();
+                                          },
                                         ),
                                       ),
-                                    ),
-                                  ),
-                                )
+                                    )
+                                    : const CircularProgressIndicator())
                                 : const CircularProgressIndicator()),
                   ),
                   // Videolar için etkileşim butonları (yerel videolar)
@@ -521,16 +744,9 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
                               isLiked ? Colors.pink : Colors.pinkAccent,
                           onPressed: () {
                             if (isLocal) {
-                              _toggleLike(videoId);
+                              _toggleLike(videoId, isYoutube: false);
                             } else {
-                              setState(() {
-                                if (isLiked) {
-                                  likedVideoIds.remove(videoId);
-                                } else {
-                                  likedVideoIds.add(videoId);
-                                  dislikedVideoIds.remove(videoId);
-                                }
-                              });
+                              _toggleLike(videoId, isYoutube: true);
                             }
                           },
                           child: Icon(
@@ -546,16 +762,9 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
                               isDisliked ? Colors.blue : Colors.blueAccent,
                           onPressed: () {
                             if (isLocal) {
-                              _toggleDislike(videoId);
+                              _toggleDislike(videoId, isYoutube: false);
                             } else {
-                              setState(() {
-                                if (isDisliked) {
-                                  dislikedVideoIds.remove(videoId);
-                                } else {
-                                  dislikedVideoIds.add(videoId);
-                                  likedVideoIds.remove(videoId);
-                                }
-                              });
+                              _toggleDislike(videoId, isYoutube: true);
                             }
                           },
                           child: Icon(
@@ -591,12 +800,10 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
 
   @override
   void dispose() {
-    for (var controller in _controllers.values) {
-      controller?.dispose();
-    }
     for (var controller in _ytControllers.values) {
       controller?.dispose();
     }
+    _disposeLocalControllers();
     super.dispose();
   }
 }
@@ -961,7 +1168,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> _fetchHistory() async {
+    if (!mounted) return;
+
     setState(() => _isLoading = true);
+
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) {
       setState(() {
@@ -972,28 +1182,32 @@ class _HistoryScreenState extends State<HistoryScreen> {
       });
       return;
     }
+
     try {
-      // جلب سجل المشاهدة
-      final localWatched = await Supabase.instance.client
+      // Fetch watch history
+      final watchHistory = await Supabase.instance.client
           .from('video_history')
-          .select('video_id, user_name, watched_at')
+          .select()
           .eq('user_id', user.id)
           .order('watched_at', ascending: false);
-      // جلب سجل الإعجاب
+
+      // Fetch liked videos
       final liked = await Supabase.instance.client
           .from('likes')
-          .select('video_id, user_name, created_at')
+          .select()
           .eq('user_id', user.id)
           .order('created_at', ascending: false);
-      // جلب سجل عدم الإعجاب
+
+      // Fetch disliked videos
       final disliked = await Supabase.instance.client
           .from('dislikes')
-          .select('video_id, user_name, created_at')
+          .select()
           .eq('user_id', user.id)
           .order('created_at', ascending: false);
+
       if (mounted) {
         setState(() {
-          _watched = List<Map<String, dynamic>>.from(localWatched);
+          _watched = List<Map<String, dynamic>>.from(watchHistory);
           _liked = List<Map<String, dynamic>>.from(liked);
           _disliked = List<Map<String, dynamic>>.from(disliked);
           _isLoading = false;
@@ -1032,20 +1246,75 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                     const SizedBox(height: 8),
                     if (_watched.isEmpty)
-                      const Text('Henüz izleme geçmişi yok.'),
-                    ..._watched.map((item) {
-                      return Card(
-                        child: ListTile(
-                          leading: Icon(
-                            Icons.ondemand_video,
-                            size: 40,
-                            color: Colors.purple,
-                          ),
-                          title: Text(item['video_id'] ?? 'Video'),
-                          subtitle: Text(item['user_name'] ?? ''),
-                        ),
-                      );
-                    }),
+                      const Text('Henüz izleme geçmişi yok.')
+                    else
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _watched.length,
+                        itemBuilder: (context, index) {
+                          final item = _watched[index];
+                          return Card(
+                            child: ListTile(
+                              leading:
+                                  item['thumbnail_url'] != null
+                                      ? ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Image.network(
+                                          item['thumbnail_url'],
+                                          width: 56,
+                                          height: 56,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (
+                                            context,
+                                            error,
+                                            stackTrace,
+                                          ) {
+                                            return Container(
+                                              width: 56,
+                                              height: 56,
+                                              color: Colors.grey[300],
+                                              child: const Icon(Icons.error),
+                                            );
+                                          },
+                                        ),
+                                      )
+                                      : const Icon(
+                                        Icons.video_library,
+                                        size: 40,
+                                        color: Colors.purple,
+                                      ),
+                              title: Text(item['title'] ?? 'Video'),
+                              subtitle: Text(
+                                'İzlenme: ${DateTime.parse(item['watched_at']).toLocal().toString().split('.')[0]}',
+                              ),
+                              onTap: () {
+                                if (item['is_youtube'] == true) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder:
+                                          (context) => YoutubePlayerScreen(
+                                            videoId: item['video_id'],
+                                          ),
+                                    ),
+                                  );
+                                } else if (item['video_url'] != null) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder:
+                                          (context) => SimpleVideoPlayerScreen(
+                                            videoUrl: item['video_url'],
+                                          ),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          );
+                        },
+                      ),
                     const SizedBox(height: 24),
                     const Text(
                       'Beğenilen Videolar',
@@ -1057,20 +1326,75 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                     const SizedBox(height: 8),
                     if (_liked.isEmpty)
-                      const Text('Henüz beğendiğiniz video yok.'),
-                    ..._liked.map((item) {
-                      return Card(
-                        child: ListTile(
-                          leading: Icon(
-                            Icons.ondemand_video,
-                            size: 40,
-                            color: Colors.pink,
-                          ),
-                          title: Text(item['video_id'] ?? 'Video'),
-                          subtitle: Text(item['user_name'] ?? ''),
-                        ),
-                      );
-                    }),
+                      const Text('Henüz beğendiğiniz video yok.')
+                    else
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _liked.length,
+                        itemBuilder: (context, index) {
+                          final item = _liked[index];
+                          return Card(
+                            child: ListTile(
+                              leading:
+                                  item['thumbnail_url'] != null
+                                      ? ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Image.network(
+                                          item['thumbnail_url'],
+                                          width: 56,
+                                          height: 56,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (
+                                            context,
+                                            error,
+                                            stackTrace,
+                                          ) {
+                                            return Container(
+                                              width: 56,
+                                              height: 56,
+                                              color: Colors.grey[300],
+                                              child: const Icon(Icons.error),
+                                            );
+                                          },
+                                        ),
+                                      )
+                                      : const Icon(
+                                        Icons.favorite,
+                                        size: 40,
+                                        color: Colors.pink,
+                                      ),
+                              title: Text(item['title'] ?? 'Video'),
+                              subtitle: Text(
+                                'Beğenildi: ${DateTime.parse(item['created_at']).toLocal().toString().split('.')[0]}',
+                              ),
+                              onTap: () {
+                                if (item['is_youtube'] == true) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder:
+                                          (context) => YoutubePlayerScreen(
+                                            videoId: item['video_id'],
+                                          ),
+                                    ),
+                                  );
+                                } else if (item['video_url'] != null) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder:
+                                          (context) => SimpleVideoPlayerScreen(
+                                            videoUrl: item['video_url'],
+                                          ),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          );
+                        },
+                      ),
                     const SizedBox(height: 24),
                     const Text(
                       'Beğenilmeyen Videolar',
@@ -1082,20 +1406,75 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                     const SizedBox(height: 8),
                     if (_disliked.isEmpty)
-                      const Text('Henüz beğenmediğiniz video yok.'),
-                    ..._disliked.map((item) {
-                      return Card(
-                        child: ListTile(
-                          leading: Icon(
-                            Icons.ondemand_video,
-                            size: 40,
-                            color: Colors.blue,
-                          ),
-                          title: Text(item['video_id'] ?? 'Video'),
-                          subtitle: Text(item['user_name'] ?? ''),
-                        ),
-                      );
-                    }),
+                      const Text('Henüz beğenmediğiniz video yok.')
+                    else
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _disliked.length,
+                        itemBuilder: (context, index) {
+                          final item = _disliked[index];
+                          return Card(
+                            child: ListTile(
+                              leading:
+                                  item['thumbnail_url'] != null
+                                      ? ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Image.network(
+                                          item['thumbnail_url'],
+                                          width: 56,
+                                          height: 56,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (
+                                            context,
+                                            error,
+                                            stackTrace,
+                                          ) {
+                                            return Container(
+                                              width: 56,
+                                              height: 56,
+                                              color: Colors.grey[300],
+                                              child: const Icon(Icons.error),
+                                            );
+                                          },
+                                        ),
+                                      )
+                                      : const Icon(
+                                        Icons.thumb_down,
+                                        size: 40,
+                                        color: Colors.blue,
+                                      ),
+                              title: Text(item['title'] ?? 'Video'),
+                              subtitle: Text(
+                                'Beğenilmedi: ${DateTime.parse(item['created_at']).toLocal().toString().split('.')[0]}',
+                              ),
+                              onTap: () {
+                                if (item['is_youtube'] == true) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder:
+                                          (context) => YoutubePlayerScreen(
+                                            videoId: item['video_id'],
+                                          ),
+                                    ),
+                                  );
+                                } else if (item['video_url'] != null) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder:
+                                          (context) => SimpleVideoPlayerScreen(
+                                            videoUrl: item['video_url'],
+                                          ),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          );
+                        },
+                      ),
                   ],
                 ),
               ),
